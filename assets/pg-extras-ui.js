@@ -1,30 +1,35 @@
 (function () {
   "use strict";
 
+  // Returns false when the element is missing or already wired up.
+  function bindOnce(element) {
+    if (!element || element.dataset.pgExtrasBound === "true") return false;
+    element.dataset.pgExtrasBound = "true";
+    return true;
+  }
+
+  // "Show all N items" toggles inside a diagnose card body.
   function initCollapseToggles(root) {
     root.querySelectorAll("[data-pg-extras-collapse-toggle]").forEach(function (button) {
-      if (button.dataset.pgExtrasBound === "true") return;
-      button.dataset.pgExtrasBound = "true";
+      if (!bindOnce(button)) return;
+
+      button.setAttribute("aria-expanded", "false");
 
       button.addEventListener("click", function () {
         var parent = button.parentElement;
         if (!parent) return;
 
-        var targets = parent.querySelectorAll("[data-pg-extras-collapse]");
-        var expanded = button.getAttribute("aria-expanded") === "true";
-        var nextExpanded = !expanded;
+        var expanded = button.getAttribute("aria-expanded") !== "true";
 
-        targets.forEach(function (target) {
-          target.classList.toggle("hidden", !nextExpanded);
+        parent.querySelectorAll("[data-pg-extras-collapse]").forEach(function (target) {
+          target.classList.toggle("hidden", !expanded);
         });
 
-        button.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
-        button.textContent = nextExpanded
+        button.setAttribute("aria-expanded", expanded ? "true" : "false");
+        button.textContent = expanded
           ? button.dataset.expandedLabel
           : button.dataset.collapsedLabel;
       });
-
-      button.setAttribute("aria-expanded", "false");
     });
   }
 
@@ -35,45 +40,36 @@
     if (!toggle || !body) return;
 
     toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-    body.classList.toggle("hidden", !expanded);
     toggle.classList.toggle("border-b", expanded);
+    body.classList.toggle("hidden", !expanded);
     if (chevron) {
       chevron.textContent = expanded ? "▾" : "▸";
     }
   }
 
+  function bindBulkCardToggle(root, selector, expanded) {
+    var button = root.querySelector(selector);
+    if (!bindOnce(button)) return;
+
+    button.addEventListener("click", function () {
+      root.querySelectorAll("[data-pg-extras-card]").forEach(function (card) {
+        setCardExpanded(card, expanded);
+      });
+    });
+  }
+
   function initDiagnoseCards(root) {
     root.querySelectorAll("[data-pg-extras-card]").forEach(function (card) {
       var toggle = card.querySelector("[data-pg-extras-card-toggle]");
-      if (!toggle || toggle.dataset.pgExtrasBound === "true") return;
-      toggle.dataset.pgExtrasBound = "true";
+      if (!bindOnce(toggle)) return;
 
       toggle.addEventListener("click", function () {
-        var expanded = toggle.getAttribute("aria-expanded") === "true";
-        setCardExpanded(card, !expanded);
+        setCardExpanded(card, toggle.getAttribute("aria-expanded") !== "true");
       });
     });
 
-    var expandAll = root.querySelector("[data-pg-extras-cards-expand-all]");
-    var collapseAll = root.querySelector("[data-pg-extras-cards-collapse-all]");
-
-    if (expandAll && expandAll.dataset.pgExtrasBound !== "true") {
-      expandAll.dataset.pgExtrasBound = "true";
-      expandAll.addEventListener("click", function () {
-        root.querySelectorAll("[data-pg-extras-card]").forEach(function (card) {
-          setCardExpanded(card, true);
-        });
-      });
-    }
-
-    if (collapseAll && collapseAll.dataset.pgExtrasBound !== "true") {
-      collapseAll.dataset.pgExtrasBound = "true";
-      collapseAll.addEventListener("click", function () {
-        root.querySelectorAll("[data-pg-extras-card]").forEach(function (card) {
-          setCardExpanded(card, false);
-        });
-      });
-    }
+    bindBulkCardToggle(root, "[data-pg-extras-cards-expand-all]", true);
+    bindBulkCardToggle(root, "[data-pg-extras-cards-collapse-all]", false);
   }
 
   function visibleOptions(list) {
@@ -109,25 +105,30 @@
 
     list.querySelectorAll("[data-pg-extras-combobox-option]").forEach(function (option) {
       var label = (option.dataset.label || "").toLowerCase();
-      var matches = !normalized || label.indexOf(normalized) !== -1;
-      option.classList.toggle("hidden", !matches);
+      option.classList.toggle("hidden", normalized !== "" && label.indexOf(normalized) === -1);
     });
   }
 
   function selectOption(form, input, valueInput, option) {
     if (!option || option.dataset.disabled === "true") return;
 
-    var value = option.dataset.value || "";
-    var label = option.dataset.label || value || "diagnose";
-
-    input.value = label;
-    valueInput.value = value;
+    input.value = option.dataset.label || option.dataset.value || "diagnose";
+    valueInput.value = option.dataset.value || "";
     form.submit();
   }
 
+  function closeComboboxesOutside(target) {
+    document.querySelectorAll("[data-pg-extras-combobox]").forEach(function (combobox) {
+      if (combobox.contains(target)) return;
+
+      var input = combobox.querySelector("[data-pg-extras-combobox-input]");
+      var list = combobox.querySelector("[data-pg-extras-combobox-list]");
+      if (input && list) closeList(combobox, list, input);
+    });
+  }
+
   function initCombobox(combobox) {
-    if (combobox.dataset.pgExtrasBound === "true") return;
-    combobox.dataset.pgExtrasBound = "true";
+    if (!bindOnce(combobox)) return;
 
     var form = combobox.closest("form");
     var input = combobox.querySelector("[data-pg-extras-combobox-input]");
@@ -138,10 +139,11 @@
 
     if (!form || !input || !list || !valueInput) return;
 
-    function refreshActive() {
-      var options = visibleOptions(list);
-      if (activeIndex >= options.length) activeIndex = options.length - 1;
-      setActiveOption(options, activeIndex);
+    function showAllOptions() {
+      filterOptions(list, "");
+      openList(combobox, list, input);
+      activeIndex = -1;
+      setActiveOption(visibleOptions(list), activeIndex);
     }
 
     function moveActive(delta) {
@@ -154,9 +156,9 @@
         activeIndex = (activeIndex + delta + options.length) % options.length;
       }
 
-      // Skip disabled options when possible
+      // Skip disabled options, unless every remaining option is disabled.
       var guard = 0;
-      while (options[activeIndex] && options[activeIndex].dataset.disabled === "true" && guard < options.length) {
+      while (options[activeIndex].dataset.disabled === "true" && guard < options.length) {
         activeIndex = (activeIndex + delta + options.length) % options.length;
         guard += 1;
       }
@@ -164,32 +166,28 @@
       setActiveOption(options, activeIndex);
     }
 
+    // Opening on click rather than focus keeps the list closed on autofocus.
     input.addEventListener("focus", function () {
-      filterOptions(list, "");
-      openList(combobox, list, input);
-      refreshActive();
       input.select();
     });
+
+    input.addEventListener("click", showAllOptions);
 
     input.addEventListener("input", function () {
       filterOptions(list, input.value);
       openList(combobox, list, input);
       activeIndex = -1;
-      refreshActive();
+      setActiveOption(visibleOptions(list), activeIndex);
     });
 
     input.addEventListener("keydown", function (event) {
-      if (event.key === "ArrowDown") {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         openList(combobox, list, input);
-        moveActive(1);
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        openList(combobox, list, input);
-        moveActive(-1);
+        moveActive(event.key === "ArrowDown" ? 1 : -1);
       } else if (event.key === "Enter") {
         var options = visibleOptions(list);
-        if (combobox.dataset.open === "true" && activeIndex >= 0 && options[activeIndex]) {
+        if (combobox.dataset.open === "true" && options[activeIndex]) {
           event.preventDefault();
           selectOption(form, input, valueInput, options[activeIndex]);
         }
@@ -202,31 +200,20 @@
     if (toggle) {
       toggle.addEventListener("click", function (event) {
         event.preventDefault();
+
         if (combobox.dataset.open === "true") {
           closeList(combobox, list, input);
         } else {
-          filterOptions(list, "");
-          openList(combobox, list, input);
+          showAllOptions();
           input.focus();
         }
       });
     }
 
+    // mousedown fires before the input blurs, so the click always lands on an option.
     list.addEventListener("mousedown", function (event) {
-      var option = event.target.closest("[data-pg-extras-combobox-option]");
-      if (!option || option.dataset.disabled === "true") {
-        event.preventDefault();
-        return;
-      }
       event.preventDefault();
-      selectOption(form, input, valueInput, option);
-    });
-
-    document.addEventListener("click", function (event) {
-      if (!combobox.contains(event.target)) {
-        closeList(combobox, list, input);
-        activeIndex = -1;
-      }
+      selectOption(form, input, valueInput, event.target.closest("[data-pg-extras-combobox-option]"));
     });
   }
 
@@ -235,6 +222,10 @@
     initDiagnoseCards(document);
     document.querySelectorAll("[data-pg-extras-combobox]").forEach(initCombobox);
   }
+
+  document.addEventListener("click", function (event) {
+    closeComboboxesOutside(event.target);
+  });
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initAll);

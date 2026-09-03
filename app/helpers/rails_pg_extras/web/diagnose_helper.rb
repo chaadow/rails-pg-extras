@@ -5,138 +5,124 @@ module RailsPgExtras
     module DiagnoseHelper
       COLLAPSE_AFTER = 5
       HOT_CHECKS = %i[new_page_updates low_hot_same_page].freeze
+      # HOT checks report one "'table_name':" block per table.
+      HOT_TABLE_BLOCK = /\A'[^\n']+':/
 
       def humanize_check_name(check_name)
         check_name.to_s.tr("_", " ")
       end
 
-      def diagnose_card_classes(ok)
-        ok ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"
-      end
-
-      def diagnose_toggle_classes(ok, expanded:)
-        [
-          "w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left",
-          (expanded ? "border-b" : nil),
-          (ok ? "border-green-200 hover:bg-green-100" : "border-red-200 hover:bg-red-100"),
-        ].compact.join(" ")
-      end
-
-      def diagnose_badge_classes(ok)
-        ok ? "bg-green-600 text-white" : "bg-red-600 text-white"
-      end
-
-      def diagnose_count_badge_classes(ok)
-        ok ? "bg-green-200 text-green-900" : "bg-red-200 text-red-900"
-      end
-
-      def diagnose_body_classes(ok, expanded:)
-        [
-          "px-4 py-3",
-          (ok ? "text-green-900" : "text-red-900"),
-          ("hidden" unless expanded),
-        ].compact.join(" ")
-      end
-
-      def diagnose_finding_count(message, check_name: nil)
-        return nil if message.blank?
-
-        text = message.to_s.strip
-        check = check_name&.to_sym
-
-        if HOT_CHECKS.include?(check) || hot_style_message?(text)
-          count = hot_table_blocks(text).size
-          return nil if count.zero?
-
-          { count: count, label: count == 1 ? "table" : "tables" }
-        elsif list_style_message?(text)
-          _header, remainder = split_list_header(text)
-          count = split_list_items(remainder).size
-          return nil if count.zero?
-
-          { count: count, label: count == 1 ? "item" : "items" }
+      def diagnose_status_styles(ok)
+        if ok
+          {
+            card: "border-green-200 bg-green-50",
+            header: "border-green-200 hover:bg-green-100",
+            badge: "bg-green-600 text-white",
+            count: "bg-green-200 text-green-900",
+            body: "text-green-900",
+          }
+        else
+          {
+            card: "border-red-200 bg-red-50",
+            header: "border-red-200 hover:bg-red-100",
+            badge: "bg-red-600 text-white",
+            count: "bg-red-200 text-red-900",
+            body: "text-red-900",
+          }
         end
       end
 
-      def format_diagnose_message(message, check_name: nil)
-        return "".html_safe if message.blank?
-
+      def diagnose_finding_count(message, check_name: nil)
         text = message.to_s.strip
-        check = check_name&.to_sym
+        return nil if text.blank?
 
-        if HOT_CHECKS.include?(check) || hot_style_message?(text)
-          format_hot_diagnose_message(text)
-        elsif list_style_message?(text)
-          format_list_diagnose_message(text)
-        else
-          content_tag(:div, simple_format(h(text), {}, sanitize: false), class: "whitespace-pre-wrap leading-relaxed")
+        count, noun = case diagnose_message_kind(text, check_name)
+          when :hot then [hot_sections(text).first.size, "table"]
+          when :list then [list_items(text).size, "item"]
+          else return nil
+          end
+
+        return nil if count.zero?
+
+        { count: count, label: count == 1 ? noun : noun.pluralize }
+      end
+
+      def format_diagnose_message(message, check_name: nil)
+        text = message.to_s.strip
+        return "".html_safe if text.blank?
+
+        case diagnose_message_kind(text, check_name)
+        when :hot then format_hot_diagnose_message(text)
+        when :list then format_list_diagnose_message(text)
+        else plain_diagnose_message(text)
         end
       end
 
       private
 
-      def hot_style_message?(text)
-        text.match?(/'[^\n']+':\n/)
+      def diagnose_message_kind(text, check_name)
+        return :hot if HOT_CHECKS.include?(check_name&.to_sym) || text.match?(/'[^\n']+':\n/)
+        # Multi-item lists use ",\n"; single-item FK-style messages use "detected: item."
+        return :list if text.include?(",\n") || text.match?(/detected:(\n| \S)/)
+
+        :plain
       end
 
-      def list_style_message?(text)
-        # Multi-item lists use ",\n"; single-item FK-style messages use "detected: item."
-        text.include?(",\n") || text.match?(/detected:\n/) || text.match?(/detected: \S/)
+      def plain_diagnose_message(text)
+        content_tag(:div, simple_format(h(text), {}, sanitize: false), class: "whitespace-pre-wrap leading-relaxed")
+      end
+
+      # Adds the toggle hooks read by pg-extras-ui.js to items past the collapse threshold.
+      def collapsible_attributes(base_class, hidden)
+        return { class: base_class } unless hidden
+
+        { class: "#{base_class} hidden", data: { pg_extras_collapse: true } }
+      end
+
+      def collapse_toggle_button(count, noun)
+        content_tag(
+          :button,
+          "Show all #{count} #{noun}",
+          type: "button",
+          class: "mt-3 text-sm font-semibold text-blue-700 hover:text-blue-900 underline",
+          data: {
+            pg_extras_collapse_toggle: true,
+            expanded_label: "Show fewer #{noun}",
+            collapsed_label: "Show all #{count} #{noun}",
+          },
+        )
       end
 
       def format_list_diagnose_message(text)
-        _header, remainder = split_list_header(text)
-        items = split_list_items(remainder)
+        items = list_items(text)
+        return plain_diagnose_message(text) if items.empty?
 
-        if items.empty?
-          return content_tag(:div, simple_format(h(text), {}, sanitize: false), class: "whitespace-pre-wrap leading-relaxed")
-        end
+        parts = [
+          content_tag(:ul, class: "list-disc pl-5 space-y-1") do
+            safe_join(
+              items.each_with_index.map do |item, index|
+                content_tag(:li, item, collapsible_attributes("leading-snug", index >= COLLAPSE_AFTER))
+              end,
+            )
+          end,
+        ]
 
-        parts = []
-        parts << content_tag(:ul, class: "list-disc pl-5 space-y-1") do
-          safe_join(
-            items.each_with_index.map do |item, index|
-              options = { class: "leading-snug" }
-              if index >= COLLAPSE_AFTER
-                options[:class] = "#{options[:class]} hidden"
-                options[:data] = { pg_extras_collapse: true }
-              end
-              content_tag(:li, item, options)
-            end,
-          )
-        end
-
-        if items.size > COLLAPSE_AFTER
-          parts << content_tag(
-            :button,
-            "Show all #{items.size} items",
-            type: "button",
-            class: "mt-2 text-sm font-semibold text-blue-700 hover:text-blue-900 underline",
-            data: {
-              pg_extras_collapse_toggle: true,
-              expanded_label: "Show fewer items",
-              collapsed_label: "Show all #{items.size} items",
-            },
-          )
-        end
+        parts << collapse_toggle_button(items.size, "items") if items.size > COLLAPSE_AFTER
 
         safe_join(parts)
       end
 
-      def split_list_header(text)
-        if text.include?(":\n")
-          header, remainder = text.split(":\n", 2)
-          ["#{header}:", remainder.to_s]
-        elsif text.include?(": ")
-          header, remainder = text.split(": ", 2)
-          ["#{header}:", remainder.to_s]
-        else
-          [nil, text]
-        end
-      end
+      # The leading "... detected:" sentence is dropped: the card title already names the check.
+      def list_items(text)
+        remainder = if text.include?(":\n")
+            text.split(":\n", 2).last
+          elsif text.include?(": ")
+            text.split(": ", 2).last
+          else
+            text
+          end
 
-      def split_list_items(remainder)
-        remainder.to_s
+        remainder
           .sub(/\.\z/, "")
           .split(",\n")
           .flat_map { |chunk| chunk.split(/\n(?!')/) }
@@ -144,27 +130,15 @@ module RailsPgExtras
           .reject(&:blank?)
       end
 
-      def hot_table_blocks(text)
+      # Returns [per-table blocks, explanatory prose], minus the summary line.
+      def hot_sections(text)
         paragraphs = text.split(/\n{2,}/).map(&:strip).reject(&:blank?)
-        paragraphs.drop(1).select { |paragraph| paragraph.match?(/\A'[^\n']+':/) }
+        paragraphs.drop(1).partition { |paragraph| paragraph.match?(HOT_TABLE_BLOCK) }
       end
 
       def format_hot_diagnose_message(text)
-        paragraphs = text.split(/\n{2,}/).map(&:strip).reject(&:blank?)
-        return content_tag(:div, simple_format(h(text), {}, sanitize: false), class: "whitespace-pre-wrap leading-relaxed") if paragraphs.empty?
-
-        # Card title already names the check; skip the echoed summary line.
-        paragraphs.shift
-        table_blocks = []
-        prose = []
-
-        paragraphs.each do |paragraph|
-          if paragraph.match?(/\A'[^\n']+':/)
-            table_blocks << paragraph
-          else
-            prose << paragraph
-          end
-        end
+        table_blocks, prose = hot_sections(text)
+        return plain_diagnose_message(text) if table_blocks.empty? && prose.empty?
 
         parts = []
 
@@ -177,24 +151,10 @@ module RailsPgExtras
             )
           end
 
-          if table_blocks.size > COLLAPSE_AFTER
-            parts << content_tag(
-              :button,
-              "Show all #{table_blocks.size} tables",
-              type: "button",
-              class: "mt-3 text-sm font-semibold text-blue-700 hover:text-blue-900 underline",
-              data: {
-                pg_extras_collapse_toggle: true,
-                expanded_label: "Show fewer tables",
-                collapsed_label: "Show all #{table_blocks.size} tables",
-              },
-            )
-          end
+          parts << collapse_toggle_button(table_blocks.size, "tables") if table_blocks.size > COLLAPSE_AFTER
         end
 
-        if prose.any?
-          parts << render_hot_info_callout(prose)
-        end
+        parts << render_hot_info_callout(prose) if prose.any?
 
         safe_join(parts)
       end
@@ -213,8 +173,8 @@ module RailsPgExtras
         ) do
           body = content_tag(:div, class: "min-w-0 space-y-2 leading-relaxed") do
             safe_join([
-              content_tag(:p, "Why this matters", class: "font-semibold text-blue-900"),
-              *prose.map { |p| content_tag(:p, p, class: "text-blue-900") },
+              content_tag(:p, "Why this matters", class: "font-semibold"),
+              *prose.map { |paragraph| content_tag(:p, paragraph) },
             ])
           end
 
@@ -227,16 +187,13 @@ module RailsPgExtras
         title_line = lines.shift.to_s
         table_name = title_line[/'\K[^']+/] || title_line.sub(/:\z/, "")
 
-        classes = "rounded-lg border border-gray-300 bg-white px-3 py-2"
-        classes = "#{classes} hidden" if hidden
-        options = { class: classes }
-        options[:data] = { pg_extras_collapse: true } if hidden
+        attributes = collapsible_attributes("rounded-lg border border-gray-300 bg-white px-3 py-2", hidden)
 
-        content_tag(:div, options) do
+        content_tag(:div, attributes) do
           title = content_tag(:div, table_name, class: "font-semibold text-gray-900 mb-1")
           metrics = content_tag(:dl, class: "grid grid-cols-1 gap-1 text-sm") do
             safe_join(
-              lines.map do |line|
+              lines.filter_map do |line|
                 key, value = line.split(":", 2)
                 next if key.blank? || value.blank?
 
@@ -246,7 +203,7 @@ module RailsPgExtras
                     content_tag(:dd, value.strip, class: "text-gray-800"),
                   ])
                 end
-              end.compact,
+              end,
             )
           end
 

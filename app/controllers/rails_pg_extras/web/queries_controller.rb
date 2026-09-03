@@ -4,20 +4,18 @@ module RailsPgExtras::Web
     helper_method :unavailable_extensions
 
     def index
-      if params[:query_name].present?
-        @query_name = params[:query_name].to_sym.presence_in(@all_queries.keys)
-        return unless @query_name
+      @query_name = params[:query_name].presence&.to_sym&.presence_in(@all_queries.keys)
 
-        begin
-          @result = RailsPgExtras.run_query(query_name: @query_name.to_sym, in_format: :raw)
-        rescue ActiveRecord::StatementInvalid => e
-          @error = e.message
-        end
+      # An unknown query name falls back to the diagnose report.
+      return load_diagnoses unless @query_name
 
-        render :show
-      else
-        load_diagnoses
+      begin
+        @result = RailsPgExtras.run_query(query_name: @query_name, in_format: :raw)
+      rescue ActiveRecord::StatementInvalid => e
+        @error = e.message
       end
+
+      render :show
     end
 
     private
