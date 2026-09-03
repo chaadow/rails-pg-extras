@@ -2,9 +2,10 @@
 <html>
   <head>
     <title><%= content_for :title %> |  v<%= RailsPgExtras::VERSION %></title>
-    <script src="/pg-extras-rails-ujs.js"></script>
-    <script src="/pg-extras-ui.js"></script>
-    <link href="/pg-extras-tailwind.min.css" rel="stylesheet">
+    <%# Version query busts the browser cache when the gem is upgraded. %>
+    <script src="/pg-extras-rails-ujs.js?v=<%= RailsPgExtras::VERSION %>"></script>
+    <script src="/pg-extras-ui.js?v=<%= RailsPgExtras::VERSION %>"></script>
+    <link href="/pg-extras-tailwind.min.css?v=<%= RailsPgExtras::VERSION %>" rel="stylesheet">
     <%= csrf_meta_tags %>
   </head>
   <body class="p-5 text-sm bg-gray-50 text-gray-900">
