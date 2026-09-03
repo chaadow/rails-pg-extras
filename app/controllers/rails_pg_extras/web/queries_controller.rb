@@ -15,6 +15,8 @@ module RailsPgExtras::Web
         end
 
         render :show
+      else
+        load_diagnoses
       end
     end
 
@@ -30,6 +32,14 @@ module RailsPgExtras::Web
 
         memo
       end
+    end
+
+    def load_diagnoses
+      @diagnoses = RailsPgExtras.diagnose(in_format: :hash).sort_by { |d| d[:ok] ? 1 : 0 }
+      @diagnose_pass_count = @diagnoses.count { |d| d[:ok] }
+      @diagnose_fail_count = @diagnoses.size - @diagnose_pass_count
+    rescue => e
+      @diagnose_error = e.message
     end
 
     def query_disabled?(query_name)

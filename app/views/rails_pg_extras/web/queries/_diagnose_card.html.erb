@@ -1,0 +1,38 @@
+<%
+  ok = diagnosis[:ok]
+  expanded = !ok
+  finding = diagnose_finding_count(diagnosis[:message], check_name: diagnosis[:check_name])
+%>
+
+<article
+  class="rounded-xl border shadow-sm overflow-hidden <%= diagnose_card_classes(ok) %>"
+  data-pg-extras-card
+>
+  <button
+    type="button"
+    class="<%= diagnose_toggle_classes(ok, expanded: expanded) %>"
+    aria-expanded="<%= expanded %>"
+    data-pg-extras-card-toggle
+  >
+    <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-bold uppercase tracking-wide <%= diagnose_badge_classes(ok) %>">
+      <%= ok ? "OK" : "Fail" %>
+    </span>
+    <h2 class="font-semibold text-base text-gray-900 flex-1">
+      <%= humanize_check_name(diagnosis[:check_name]) %>
+      <% if finding %>
+        <span class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold <%= diagnose_count_badge_classes(ok) %>">
+          <%= finding[:count] %> <%= finding[:label] %>
+        </span>
+      <% end %>
+    </h2>
+    <span class="text-gray-500 text-lg leading-none select-none" data-pg-extras-card-chevron aria-hidden="true">
+      <%= expanded ? "▾" : "▸" %>
+    </span>
+  </button>
+  <div
+    class="<%= diagnose_body_classes(ok, expanded: expanded) %>"
+    data-pg-extras-card-body
+  >
+    <%= format_diagnose_message(diagnosis[:message], check_name: diagnosis[:check_name]) %>
+  </div>
+</article>
