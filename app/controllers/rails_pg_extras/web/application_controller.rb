@@ -51,7 +51,7 @@ module RailsPgExtras::Web
     def fetch_available_database_names
 
       ActiveRecord::Base.configurations
-            .configs_for(env_name: Rails.env)
+            .configs_for(env_name: Rails.env, include_hidden: true)
             .filter_map { |conf| (conf.respond_to?(:name) && conf.name) || (conf.respond_to?(:spec_name) && conf.spec_name) }
             .uniq
             .sort
